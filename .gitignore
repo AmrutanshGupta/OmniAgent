@@ -1,0 +1,70 @@
+# ====================================================================
+# 🔑 SECURITY: Environment Secrets & Configurations (CRITICAL)
+# ====================================================================
+.env
+.env.*
+*.env
+secrets.json
+
+# ====================================================================
+# 🧪 PRIVATE TESTING: Block Local Test Suite from GitHub
+# ====================================================================
+# Completely blocks your custom testing directory from version control
+router-ml/tests/
+
+# Pytest execution cache blocks and test coverage metrics
+.pytest_cache/
+.pytest/
+.coverage
+htmlcov/
+
+# ====================================================================
+# 🐍 PYTHON MICROSERVICE: router-ml/ Build & Data Artifacts
+# ====================================================================
+# Isolated Virtual Environment folder allocations
+router-ml/.venv/
+.venv/
+venv/
+ENV/
+
+# Python runtime compiled bytecode cache files
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch network weight binaries & scraped arena parquet datasets 
+**/data/*.pt
+**/data/*.parquet
+**/weights/*.pt
+*.egg-info/
+
+# ====================================================================
+# 🐹 GO ORCHESTRATOR: backend-go/ Local Binaries
+# ====================================================================
+# Compiled binary machine executables (wiped to keep repo lean)
+backend-go/cmd/api/api
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test coverage logs
+*.out
+*.test
+
+# ====================================================================
+# 💻 GENERAL OPERATING SYSTEM / IDE OVERHEAD CLUTTER
+# ====================================================================
+.DS_Store
+.DS_Store?
+ehthumbs.db
+Icon?
+Thumbs.db
+
+# JetBrains Suite configuration tracking layouts
+.idea/
+
+# VS Code runtime workspace preferences
+.vscode/
+*.code-workspace

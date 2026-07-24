@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  router-ml:
+    build: ./router-ml
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend-go:
+    build: ./backend-go
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ROUTER_ML_URL=http://router-ml:8000
+      - ORCH_MASTER_SECRET=change-me-in-production
+    depends_on:
+      - router-ml
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_GO_API_URL=http://localhost:8080
+    depends_on:
+      - backend-go
