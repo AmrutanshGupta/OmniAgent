@@ -1,32 +1,164 @@
-version: "3.9"
-
 services:
-  router-ml:
-    build: ./router-ml
+  # ── Docker Socket Proxy (Security Layer for DooD) ────────────────────────
+  # Exposes only the required Docker API verbs to backend-go.
+  # Never expose the raw /var/run/docker.sock to application containers.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: docker_socket_proxy
+    restart: unless-stopped
+    privileged: true
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      IMAGES: 1
+      # Explicitly disable dangerous operations
+      AUTH: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      EXEC: 0
+      GRPC: 0
+      NODES: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SESSION: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+      VOLUMES: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - internal-proxy
+
+  # ── Sandboxed Code Execution Engine (single-file Piston) ─────────────────
+  piston:
+    image: ghcr.io/engineer-man/piston
+    container_name: piston_api
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "2000:2000"
+    volumes:
+      - piston-packages:/piston/packages
+    tmpfs:
+      - /tmp:exec
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:2000/api/v2/runtimes || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # ── Python Orchestration Engine (FastAPI + LangChain) ──────────────────────
+  backend-python:
+    build: ./backend-python
     ports:
       - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+      - LANGFUSE_SECRET_KEY=sk-lf-1234567890
+      - LANGFUSE_PUBLIC_KEY=pk-lf-1234567890
+      - LANGFUSE_HOST=http://langfuse-server:3000
+    depends_on:
+      - mongodb
+    networks:
+      - default
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
+  # ── Langfuse (Observability) ─────────────────────────────────────────────
+  langfuse-server:
+    image: langfuse/langfuse:2
+    ports:
+      - "3001:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@langfuse-db:5432/postgres
+      - NEXTAUTH_SECRET=mysecret
+      - SALT=mysalt
+      - NEXTAUTH_URL=http://localhost:3001
+      - TELEMETRY_ENABLED=false
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=false
+    depends_on:
+      - langfuse-db
+    networks:
+      - default
+
+  langfuse-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    volumes:
+      - langfuse_data:/var/lib/postgresql/data
+    networks:
+      - default
+
+  # ── Go Orchestrator (Fiber + WebSockets + DooD Sandbox Engine) ───────────
   backend-go:
     build: ./backend-go
     ports:
       - "8080:8080"
+    env_file:
+      - ./backend-go/.env
     environment:
-      - PORT=8080
-      - ROUTER_ML_URL=http://router-ml:8000
-      - ORCH_MASTER_SECRET=change-me-in-production
+      - PYTHON_ROUTER_URL=http://backend-python:8000
+      - PISTON_API_URL=http://piston:2000
+      # MONGODB_URI intentionally not overridden here — falls through to Atlas URI in env_file
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    # Workspace directory must exist on the host so bind mounts work in DooD
+    volumes:
+      - /tmp/omniagent/workspaces:/tmp/omniagent/workspaces
     depends_on:
-      - router-ml
+      backend-python:
+        condition: service_healthy
+      piston:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      docker-socket-proxy:
+        condition: service_started
+    networks:
+      - default
+      - internal-proxy
 
+  # ── MongoDB ──────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+
+  # ── Frontend (Next.js) ───────────────────────────────────────────────────
   frontend:
     build: ./frontend
     ports:
       - "3000:3000"
+    env_file:
+      - ./frontend/.env.local
     environment:
-      - NEXT_PUBLIC_GO_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
+      - NEXTAUTH_URL=http://localhost:3000
     depends_on:
       - backend-go
+
+networks:
+  default:
+  # Dedicated network between backend-go and the socket proxy only
+  internal-proxy:
+    internal: true
+
+volumes:
+  piston-packages:
+  mongodb_data:
+  langfuse_data:

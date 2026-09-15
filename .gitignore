@@ -6,6 +6,10 @@
 *.env
 secrets.json
 
+# Whitelist example env files so new contributors know what vars to set
+!.env.example
+!.env.local.example
+
 # ====================================================================
 # 🧪 PRIVATE TESTING: Block Local Test Suite from GitHub
 # ====================================================================
@@ -54,6 +58,20 @@ backend-go/cmd/api/api
 *.test
 
 # ====================================================================
+# 🌐 FRONTEND: Next.js Build & Dependencies
+# ====================================================================
+# Node package dependencies (regenerated from package.json via npm install)
+node_modules/
+
+# Next.js build output cache
+.next/
+
+# ====================================================================
+# 🐳 PISTON: Sandbox Runtime Data (Docker volume artifacts)
+# ====================================================================
+piston/data/
+
+# ====================================================================
 # 💻 GENERAL OPERATING SYSTEM / IDE OVERHEAD CLUTTER
 # ====================================================================
 .DS_Store
@@ -68,3 +86,18 @@ Thumbs.db
 # VS Code runtime workspace preferences
 .vscode/
 *.code-workspace
+
+# ====================================================================
+# 🔧 TYPE CHECKER CONFIGS (Not committed — use IDE settings instead)
+# ====================================================================
+pyrightconfig.json
+
+# ====================================================================
+# 🐹 GO BINARIES (all platforms)
+# ====================================================================
+*.exe
+backend-go/cmd/api/api
+backend-go/api.exe
+
+# Ignore large downloaded packages that break git add
+packages/

@@ -1,74 +1,70 @@
+// backend-go/internal/security/crypto.go
 package security
 
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
-	"io"
-	"os"
 )
 
-// masterKey is derived from ORCH_MASTER_SECRET env var (never logged, never sent to client).
-func masterKey() []byte {
-	secret := os.Getenv("ORCH_MASTER_SECRET")
-	if secret == "" {
-		secret = "dev-only-insecure-default-secret-change-me"
+func DecryptUserKey(encryptedBase64, keyHex string) ([]byte, error) {
+	if encryptedBase64 == "" {
+		return nil, nil
 	}
-	sum := sha256.Sum256([]byte(secret))
-	return sum[:]
-}
 
-// Encrypt returns base64(nonce|ciphertext) for storing a BYOK API key at rest in Mongo.
-func Encrypt(plaintext string) (string, error) {
-	block, err := aes.NewCipher(masterKey())
-	if err != nil {
-		return "", err
+	if keyHex == "" {
+		return nil, errors.New("ENCRYPTION_KEY is not set")
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-	ct := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(ct), nil
-}
 
-// Decrypt reverses Encrypt. Result must only ever live in context.Context, never logged.
-func Decrypt(encoded string) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(encoded)
+	keyBytes, err := hex.DecodeString(keyHex)
 	if err != nil {
-		return "", err
+		return nil, errors.New("ENCRYPTION_KEY is not a valid hex string")
 	}
-	block, err := aes.NewCipher(masterKey())
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	ns := gcm.NonceSize()
-	if len(data) < ns {
-		return "", errors.New("ciphertext too short")
-	}
-	nonce, ct := data[:ns], data[ns:]
-	pt, err := gcm.Open(nil, nonce, ct, nil)
-	if err != nil {
-		return "", err
-	}
-	return string(pt), nil
-}
+	// Zero out the decoded ENCRYPTION_KEY buffer when done just to be safe
+	defer func() {
+		for i := range keyBytes {
+			keyBytes[i] = 0
+		}
+	}()
 
-// Redact is used by logging middleware to ensure keys never hit stdout/stderr.
-func Redact(s string) string {
-	if len(s) <= 8 {
-		return "****"
+	if len(keyBytes) != 32 {
+		return nil, errors.New("ENCRYPTION_KEY must be exactly 32 bytes (64 hex characters)")
 	}
-	return s[:4] + "****" + s[len(s)-4:]
+
+	decoded, err := base64.StdEncoding.DecodeString(encryptedBase64)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(decoded) < 28 {
+		return nil, errors.New("ciphertext too short")
+	}
+
+	iv := decoded[:12]
+	tag := decoded[12:28]
+	ciphertext := decoded[28:]
+
+
+	goCiphertext := make([]byte, 0, len(ciphertext)+len(tag))
+	goCiphertext = append(goCiphertext, ciphertext...)
+	goCiphertext = append(goCiphertext, tag...)
+
+	block, err := aes.NewCipher(keyBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	plaintext, err := aesGCM.Open(nil, iv, goCiphertext, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return plaintext, nil
 }

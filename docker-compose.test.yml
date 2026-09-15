@@ -1,0 +1,118 @@
+services:
+  llm-mock:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile.llm_mock
+    container_name: llm_mock
+    ports:
+      - "8081:8081"
+    networks:
+      - test-net
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: docker_socket_proxy_test
+    privileged: true
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      IMAGES: 1
+      AUTH: 0
+      BUILD: 0
+      # Keep these disabled for security in test
+      EXEC: 0
+      GRPC: 0
+      VOLUMES: 1 # Needs volumes for DooD workspaces
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - test-net
+
+  piston:
+    image: ghcr.io/engineer-man/piston
+    container_name: piston_api_test
+    privileged: true
+    ports:
+      - "2000:2000"
+    volumes:
+      - piston-packages-test:/piston/packages
+    tmpfs:
+      - /tmp:exec
+    networks:
+      - test-net
+
+  router-ml:
+    build: ./router-ml
+    container_name: router_ml_test
+    ports:
+      - "8000:8000"
+    networks:
+      - test-net
+
+  backend-go:
+    build: ./backend-go
+    container_name: backend_go_test
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHON_ROUTER_URL=http://router-ml:8000
+      - PISTON_API_URL=http://piston:2000
+      - MONGODB_URI=mongodb://mongodb:27017
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+      - LLM_MOCK_URL=http://llm-mock:8081
+    volumes:
+      - /tmp/omniagent/workspaces:/tmp/omniagent/workspaces
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      - router-ml
+      - piston
+      - mongodb
+      - docker-socket-proxy
+    networks:
+      - test-net
+
+  test-runner:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile.test_runner
+    container_name: omniagent_test_runner
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/
+      - ROUTER_URL=http://router-ml:8000
+      - BACKEND_URL=http://backend-go:8080
+      - WS_URL=ws://backend-go:8080/ws
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-testsecret}
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+      - BACKEND_GO_SRC=/backend-go-src
+    volumes:
+      - ./scripts:/app
+      - ./backend-go:/backend-go-src:ro
+    depends_on:
+      backend-go:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+    networks:
+      - test-net
+
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb_test
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data_test:/data/db
+    networks:
+      - test-net
+
+networks:
+  test-net:
+
+volumes:
+  piston-packages-test:
+  mongodb_data_test:

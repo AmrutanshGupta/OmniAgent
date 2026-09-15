@@ -1,0 +1,7 @@
+aiohttp
+websockets
+pymongo
+PyJWT
+docker
+fastapi[standard]
+pydantic

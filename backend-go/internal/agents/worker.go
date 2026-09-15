@@ -1,76 +1,166 @@
 package agents
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"time"
 
-	"llm-orchestrator/backend-go/internal/llm_clients"
-	"llm-orchestrator/backend-go/internal/models"
-	"llm-orchestrator/backend-go/internal/router_client"
+	"github.com/AmrutanshGupta/OmniAgent/backend-go/internal/config"
+	"github.com/AmrutanshGupta/OmniAgent/backend-go/internal/security"
+
+	"github.com/AmrutanshGupta/OmniAgent/backend-go/internal/models"
 )
 
-var systemPrompts = map[string]string{
-	"coding":     "You are a precise senior software engineer. Return only correct, runnable code plus a one-line explanation.",
-	"data":       "You are a data analyst. Be quantitative and cite concrete numbers/structure in your answer.",
-	"creative":   "You are a creative copywriter. Be vivid but concise.",
-	"synthesis":  "You merge multiple specialist outputs into one coherent final answer.",
+type RouteRequest struct {
+	WQ float64 `json:"wq"`
+	WC float64 `json:"wc"`
+	WL float64 `json:"wl"`
 }
 
-// ExecuteTask asks the infra-aware Router for a model tier (based on live
-// queue depth + prompt complexity + SLA bias), then runs the task at that
-// tier via the LLM client. It does not validate quality — that's the
-// Critic's job (see critic_cascade.go).
-func ExecuteTask(t *models.Task, queueDepth int, qualityBias float64, keys models.APIKeyBundle) {
-	t.Status = models.StatusExecuting
-	t.Attempts++
+type RouteResponse struct {
+	OptimalModel    string  `json:"optimal_model"`
+	ExpectedLatency float64 `json:"expected_latency"`
+	ExpectedCost    float64 `json:"expected_cost"`
+}
 
-	route := router_client.Route(router_client.RouteRequest{
-		PromptTokens: len(t.Description) / 4,
-		Complexity:   complexityOf(t.Description),
-		QueueDepth:   queueDepth,
-		QualityBias:  qualityBias,
-	})
-	t.Tier = route.Tier
+// AssignTier returns a sensible tier fallback.
+// The actual routing is performed by router_client.GetOptimalRoute in coordinator.go.
+// This function is retained for callers that need a synchronous tier before the
+// registry cache is populated.
+func AssignTier(domain int, mlTier int, keys map[string]string, cfg *config.Config) string {
+	// Map ML tier index to tier string
+	switch mlTier {
+	case 0:
+		if keys["openai"] != "" {
+			return "gpt-4o"
+		}
+	case 1:
+		if keys["anthropic"] != "" {
+			return "sonnet"
+		}
+	case 2:
+		if keys["google"] != "" {
+			return "flash"
+		}
+	}
+	// Free-tier fallbacks
+	if keys["groq"] != "" {
+		return "groq"
+	}
+	return "hf"
+}
 
-	// Respect the FrugalGPT cascade position if the Critic already escalated us.
-	if t.CascadeIdx > 0 && t.CascadeIdx < len(t.Cascade) {
-		t.Tier = t.Cascade[t.CascadeIdx]
+type ExecutorRequest struct {
+	SessionID      string            `json:"session_id"`
+	NodeID         string            `json:"node_id"`
+	Task           string            `json:"task"`
+	OriginalPrompt string            `json:"original_prompt"`
+	Tier           string            `json:"tier"`
+	Keys           map[string]string `json:"keys"`
+}
+
+type ExecutorResponse struct {
+	Result     string `json:"result"`
+	TokensUsed int    `json:"tokens_used"`
+}
+
+func ExecuteReActLoop(ctx context.Context, node *models.TaskNode, tierStr string, originalPrompt string, cfg *config.Config) error {
+	node.ThoughtTrace = append(node.ThoughtTrace, fmt.Sprintf("Routing to model tier: %s", tierStr))
+
+	provider := "openai" // default
+	switch tierStr {
+	case "sonnet":
+		provider = "anthropic"
+	case "flash":
+		provider = "google"
+	case "groq":
+		provider = "groq"
+	case "hf":
+		provider = "huggingface"
 	}
 
-	sys := systemPrompts[t.Domain]
-	if sys == "" {
-		sys = "You are a helpful assistant."
+	credService := security.NewCredentialService(cfg.EncryptionKey)
+	decryptedKey, err := credService.GetDecryptedKey(ctx, provider)
+	if err != nil && provider != "hf" && provider != "groq" {
+		// Log error but we might proceed if it's a free tier
+		fmt.Printf("Warning: failed to decrypt key for provider %s: %v\n", provider, err)
 	}
 
-	result, err := llm_clients.Complete(t.Tier, sys, t.Description, keys.OpenAI, keys.Anthropic, keys.Google)
+	decryptedKeys := map[string]string{
+		provider: decryptedKey,
+	}
+	
+	defer func() {
+		// strict memclr is harder in Go with strings, but we can clear the map
+		decryptedKeys[provider] = ""
+	}()
+
+	reqPayload := ExecutorRequest{
+		SessionID:      node.SessionID,
+		NodeID:         node.ID,
+		Task:           node.Task,
+		OriginalPrompt: originalPrompt,
+		Tier:           tierStr,
+		Keys:           decryptedKeys,
+	}
+
+	payloadBytes, err := json.Marshal(reqPayload)
 	if err != nil {
-		t.Status = models.StatusFailed
-		t.Output = fmt.Sprintf("error: %v", err)
-		return
+		node.Status = models.StateFailed
+		return fmt.Errorf("failed to marshal executor request: %v", err)
 	}
-	t.Output = result.Text
-	t.TokensUsed = result.TokensUsed
-	t.CostUSD = estimateCost(t.Tier, result.TokensUsed)
-	t.Status = models.StatusCompleted
-}
 
-func complexityOf(desc string) float64 {
-	l := len(desc)
-	switch {
-	case l < 80:
-		return 0.2
-	case l < 200:
-		return 0.5
-	default:
-		return 0.85
+	pythonURL := cfg.PythonRouterURL
+	if pythonURL == "" {
+		pythonURL = "http://backend-python:8000"
 	}
-}
+	url := fmt.Sprintf("%s/v1/execute-node", pythonURL)
 
-// estimateCost uses rough public per-1K-token pricing for telemetry display only.
-func estimateCost(tier string, tokens int) float64 {
-	perK := map[string]float64{"flash": 0.0004, "sonnet": 0.003, "gpt-4o": 0.005}
-	rate, ok := perK[tier]
-	if !ok {
-		rate = 0.002
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		node.Status = models.StateFailed
+		return fmt.Errorf("failed to create executor request: %v", err)
 	}
-	return (float64(tokens) / 1000.0) * rate
+	req.Header.Set("Content-Type", "application/json")
+
+	// Timeout should be long enough for the LangChain agent to complete
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		node.Status = models.StateFailed
+		return fmt.Errorf("executor API error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		node.Status = models.StateFailed
+		return fmt.Errorf("executor API returned status: %d", resp.StatusCode)
+	}
+
+	var execResp ExecutorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&execResp); err != nil {
+		node.Status = models.StateFailed
+		return fmt.Errorf("failed to decode executor response: %v", err)
+	}
+
+	node.Result = execResp.Result
+	node.TokensUsed = execResp.TokensUsed
+	node.Status = models.StateSucceeded
+
+	// Cost calculation based on heuristic or exact if returned
+	switch tierStr {
+	case "gpt-4o":
+		node.CostUSD = float64(node.TokensUsed) * 0.000005
+	case "sonnet":
+		node.CostUSD = float64(node.TokensUsed) * 0.000003
+	case "flash":
+		node.CostUSD = float64(node.TokensUsed) * 0.00000015
+	case "groq", "hf":
+		node.CostUSD = 0.0
+	}
+
+	return nil
 }

@@ -1,36 +1,86 @@
+// backend-go/internal/agents/synthesizer.go
 package agents
 
 import (
+	"fmt"
 	"strings"
 
-	"llm-orchestrator/backend-go/internal/models"
+	"github.com/AmrutanshGupta/OmniAgent/backend-go/internal/models"
 )
 
-// Synthesize compiles all completed task outputs into one final payload.
-// Pure Go string composition — no LLM calls, matching the PRD's "native Go
-// logic (zero LLM calls)" requirement.
-func Synthesize(tasks []models.Task) string {
+func getTopologicalOrder(dag *models.DAG) []string {
+	inDegree := make(map[string]int)
+	adj := make(map[string][]string)
+	for id := range dag.Nodes {
+		inDegree[id] = 0
+	}
+	for _, edge := range dag.Edges {
+		from, to := edge[0], edge[1]
+		adj[from] = append(adj[from], to)
+		inDegree[to]++
+	}
+	var q []string
+	for id, deg := range inDegree {
+		if deg == 0 {
+			q = append(q, id)
+		}
+	}
+	var order []string
+	for len(q) > 0 {
+		curr := q[0]
+		q = q[1:]
+		order = append(order, curr)
+		for _, next := range adj[curr] {
+			inDegree[next]--
+			if inDegree[next] == 0 {
+				q = append(q, next)
+			}
+		}
+	}
+	return order
+}
+
+func Synthesize(dag *models.DAG) string {
 	var b strings.Builder
 	b.WriteString("# Final Synthesized Output\n\n")
-	for _, t := range tasks {
-		if t.Status != models.StatusCompleted {
+
+	order := getTopologicalOrder(dag)
+
+	for _, id := range order {
+		t := dag.Nodes[id]
+		if t == nil || t.Status != models.StateSucceeded {
 			continue
 		}
-		b.WriteString("## [" + t.Domain + "] " + t.Description + "\n")
-		b.WriteString(t.Output + "\n\n")
+
+		domainStr := "General"
+		if t.Domain == 1 {
+			domainStr = "Code"
+		}
+
+		b.WriteString(fmt.Sprintf("## [%s] Node: %s\n", domainStr, id))
+		b.WriteString(fmt.Sprintf("Task: %s\n", t.Task))
+		b.WriteString(t.Result)
+		b.WriteString("\n\n")
 	}
+
 	return b.String()
 }
 
-// TotalCost sums cost across the whole DAG for the Cost Tracker widget.
-func TotalCost(tasks []models.Task) (spent float64, savedVsTopTier float64) {
-	for _, t := range tasks {
+func TotalCost(dag *models.DAG) (spent float64, savedVsTopTier float64) {
+	for _, t := range dag.Nodes {
 		spent += t.CostUSD
-		// "saved" = what it would have cost had every task run gpt-4o from the start.
+
 		topTierCost := estimateCost("gpt-4o", t.TokensUsed)
 		if topTierCost > t.CostUSD {
 			savedVsTopTier += topTierCost - t.CostUSD
 		}
 	}
-	return
+	return spent, savedVsTopTier
+}
+
+func estimateCost(model string, tokens int) float64 {
+	if model == "gpt-4o" {
+		return float64(tokens) * 0.000015
+	}
+	return 0.0
 }
