@@ -111,7 +111,7 @@ services:
     environment:
       - PYTHON_ROUTER_URL=http://backend-python:8000
       - PISTON_API_URL=http://piston:2000
-      # MONGODB_URI intentionally not overridden here — falls through to Atlas URI in env_file
+      - MONGODB_URI=mongodb://mongodb:27017
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
     # Workspace directory must exist on the host so bind mounts work in DooD
     volumes:
