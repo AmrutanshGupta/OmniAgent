@@ -1,2 +1,2 @@
 [tool.pyrefly]
-python_interpreter = "../router-ml/.venv/Scripts/python.exe"
+python_interpreter = ".venv/Scripts/python.exe"
