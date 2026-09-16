@@ -11,7 +11,7 @@ secrets.json
 !.env.local.example
 
 # ====================================================================
-# 🧪 PRIVATE TESTING: Block Local Test Suite from GitHub
+# 🔒 PRIVATE TESTING: Block Local Test Suite from GitHub
 # ====================================================================
 # Completely blocks your custom testing directory from version control
 router-ml/tests/
@@ -21,6 +21,19 @@ router-ml/tests/
 .pytest/
 .coverage
 htmlcov/
+
+# ====================================================================
+# 🧪 TEST INFRASTRUCTURE: Keep off GitHub
+# ====================================================================
+# Go unit test files
+**/*_test.go
+
+# Test docker-compose files
+docker-compose.test.yml
+docker-compose.test*.yml
+
+# Scripts folder (test infra only)
+scripts/
 
 # ====================================================================
 # 🐍 PYTHON MICROSERVICE: router-ml/ Build & Data Artifacts
