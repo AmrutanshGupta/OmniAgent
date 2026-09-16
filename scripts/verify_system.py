@@ -9,12 +9,12 @@ import statistics
 import datetime
 import subprocess
 import traceback
-import aiohttp
-import websockets
-import pymongo
-import jwt
+import aiohttp  # type: ignore
+import websockets  # type: ignore
+import pymongo  # type: ignore
+import jwt  # type: ignore
 try:
-    import docker
+    import docker  # type: ignore
 except ImportError:
     docker = None
 
