@@ -58,7 +58,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_URI=mongodb://mongodb:27017/omniagent
       - LANGFUSE_SECRET_KEY=sk-lf-1234567890
       - LANGFUSE_PUBLIC_KEY=pk-lf-1234567890
       - LANGFUSE_HOST=http://langfuse-server:3000
@@ -111,7 +111,7 @@ services:
     environment:
       - PYTHON_ROUTER_URL=http://backend-python:8000
       - PISTON_API_URL=http://piston:2000
-      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_URI=mongodb://mongodb:27017/omniagent
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
     # Workspace directory must exist on the host so bind mounts work in DooD
     volumes:
@@ -149,7 +149,7 @@ services:
     environment:
       - NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
       - NEXTAUTH_URL=http://localhost:3000
-      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_URI=mongodb://mongodb:27017/omniagent
     depends_on:
       - backend-go
 
