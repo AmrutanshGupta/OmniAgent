@@ -96,6 +96,7 @@ pyrightconfig.json
 # 🐹 GO BINARIES (all platforms)
 # ====================================================================
 *.exe
+*.bin
 backend-go/cmd/api/api
 backend-go/api.exe
 
